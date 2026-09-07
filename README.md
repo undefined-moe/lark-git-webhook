@@ -4,6 +4,18 @@
 
 ## Build
 
+The recommended way to build is with the Nix flake (Nix with the `flakes` and `nix-command` experimental features enabled):
+
+```sh
+nix build .#lark-git-webhook
+```
+
+This produces the statically linked binary `result/bin/lark-git-webhook` (the package is also aliased as `.#default`). Building needs no Go-module network access because the dependencies are vendored in the repository. For a development shell with the Go toolchain, run `nix develop`.
+
+### Building without Nix
+
+If you do not use Nix, build the same static binary directly with the Go toolchain:
+
 ```sh
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /tmp/lark-git-webhook ./cmd/lark-git-webhook
 ```
@@ -13,7 +25,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /tmp/lark-git-webhook ./cmd
 The supplied unit publishes the GitHub webhook on port 8080 and keeps operational endpoints on loopback port 9090.
 
 ```sh
-sudo install -Dm0755 /tmp/lark-git-webhook /usr/local/bin/lark-git-webhook
+sudo install -Dm0755 result/bin/lark-git-webhook /usr/local/bin/lark-git-webhook
 sudo install -Dm0644 deploy/lark-git-webhook.service /etc/systemd/system/lark-git-webhook.service
 sudo install -Dm0600 /dev/null /etc/lark-git-webhook.env
 sudoedit /etc/lark-git-webhook.env
@@ -125,7 +137,7 @@ For push troubleshooting, first check `lark_git_webhook_events_received_total{ev
 ```sh
 sudo systemctl stop lark-git-webhook
 sudo cp -a /var/lib/lark-git-webhook/lark-git-webhook.db /var/lib/lark-git-webhook/archive /var/backups/lark-git-webhook.$(date +%F-%H%M%S)
-sudo install -m0755 /path/to/new/lark-git-webhook /usr/local/bin/lark-git-webhook
+sudo install -m0755 result/bin/lark-git-webhook /usr/local/bin/lark-git-webhook
 sudo systemctl start lark-git-webhook
 sudo systemctl status lark-git-webhook
 ```
