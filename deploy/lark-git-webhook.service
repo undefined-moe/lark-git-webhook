@@ -1,0 +1,43 @@
+[Unit]
+Description=GitHub webhook to Lark relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/lark-git-webhook.env
+Environment=DATA_DIR=/var/lib/lark-git-webhook
+Environment=LISTEN_ADDR=0.0.0.0:8080
+Environment=ADMIN_LISTEN_ADDR=127.0.0.1:9090
+Environment=WEBHOOK_PATH=/webhook
+Environment=LARK_EVENT_PATH=/webhook/lark/event
+Environment=LARK_CALLBACK_PATH=/webhook/lark/callback
+# Set GITHUB_AUDIT_ORG and GITHUB_AUDIT_TOKEN together in /etc/lark-git-webhook.env to enable audit polling.
+# Fine-grained tokens need Administration:read; classic tokens need read:audit_log.
+# Optional: set MAXMIND_CITY_DB_PATH in /etc/lark-git-webhook.env to a local GeoLite2-City or GeoIP2-City .mmdb.
+# The database is not bundled. Keep it and its directory private (0600/0640 file; private directory).
+# The recommended standalone path is /root/lark-git-webhook/data/GeoLite2-City.mmdb, but ProtectHome=yes requires a readable private path below /var/lib/lark-git-webhook for this unit.
+ExecStart=/usr/local/bin/lark-git-webhook
+Restart=on-failure
+RestartSec=5s
+DynamicUser=yes
+StateDirectory=lark-git-webhook
+StateDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
