@@ -15,6 +15,7 @@ import (
 	"github.com/undefined-moe/lark-git-webhook/internal/config"
 	"github.com/undefined-moe/lark-git-webhook/internal/forwarder"
 	"github.com/undefined-moe/lark-git-webhook/internal/github"
+	"github.com/undefined-moe/lark-git-webhook/internal/gitlabwebhook"
 	"github.com/undefined-moe/lark-git-webhook/internal/lark"
 	"github.com/undefined-moe/lark-git-webhook/internal/larkcallback"
 	"github.com/undefined-moe/lark-git-webhook/internal/metrics"
@@ -34,9 +35,11 @@ func TestWebhookMuxIsolatesConfiguredPublicRoutes(t *testing.T) {
 	}
 	cfg := config.Config{
 		WebhookPath:           "/webhook/github",
+		GitLabWebhookPath:     "/webhook/gitlab",
 		LarkEventPath:         "/webhook/lark/event",
 		LarkCallbackPath:      "/webhook/lark/callback",
 		GitHubSecret:          "secret",
+		GitLabSecret:          "gitlab-secret",
 		LarkVerificationToken: "verification-token",
 		LarkAppID:             "cli_test",
 		MaxBodyBytes:          1024,
@@ -45,10 +48,11 @@ func TestWebhookMuxIsolatesConfiguredPublicRoutes(t *testing.T) {
 	}
 	mux := webhookMux(
 		webhook.New(s, a, cfg.GitHubSecret, cfg.LarkChatID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, &metrics.Metrics{}),
+		gitlabwebhook.New(s, a, cfg.GitLabSecret, cfg.LarkChatID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, &metrics.Metrics{}),
 		larkcallback.New(s, a, cfg.LarkVerificationToken, cfg.LarkAppID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, github.New(), nil),
 		cfg,
 	)
-	for _, path := range []string{"/webhook", "/webhook/lark"} {
+	for _, path := range []string{"/webhook", "/webhook/lark", "/gitlab/webhook"} {
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
 		if response.Code != http.StatusNotFound {
@@ -59,6 +63,18 @@ func TestWebhookMuxIsolatesConfiguredPublicRoutes(t *testing.T) {
 	mux.ServeHTTP(github, httptest.NewRequest(http.MethodPost, cfg.WebhookPath, strings.NewReader(`{}`)))
 	if github.Code != http.StatusUnauthorized {
 		t.Fatalf("GitHub route status=%d", github.Code)
+	}
+	gitlab := httptest.NewRecorder()
+	mux.ServeHTTP(gitlab, httptest.NewRequest(http.MethodPost, cfg.GitLabWebhookPath, strings.NewReader(`{}`)))
+	if gitlab.Code != http.StatusUnauthorized {
+		t.Fatalf("GitLab route status=%d", gitlab.Code)
+	}
+	gitlabAuthed := httptest.NewRequest(http.MethodPost, cfg.GitLabWebhookPath, strings.NewReader(`{"object_kind":"push"}`))
+	gitlabAuthed.Header.Set("X-Gitlab-Token", cfg.GitLabSecret)
+	authed := httptest.NewRecorder()
+	mux.ServeHTTP(authed, gitlabAuthed)
+	if authed.Code != http.StatusBadRequest {
+		t.Fatalf("GitLab authed route without event status=%d", authed.Code)
 	}
 	for _, path := range []string{cfg.LarkEventPath, cfg.LarkCallbackPath} {
 		lark := httptest.NewRecorder()

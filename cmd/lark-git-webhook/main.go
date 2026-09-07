@@ -19,6 +19,7 @@ import (
 	"github.com/undefined-moe/lark-git-webhook/internal/forwarder"
 	"github.com/undefined-moe/lark-git-webhook/internal/geoip"
 	"github.com/undefined-moe/lark-git-webhook/internal/github"
+	"github.com/undefined-moe/lark-git-webhook/internal/gitlabwebhook"
 	"github.com/undefined-moe/lark-git-webhook/internal/lark"
 	"github.com/undefined-moe/lark-git-webhook/internal/larkcallback"
 	"github.com/undefined-moe/lark-git-webhook/internal/metrics"
@@ -89,8 +90,9 @@ func main() {
 		go func() { poller.Run(ctx); close(done) }()
 	}
 	webhookHandler := webhook.New(s, a, cfg.GitHubSecret, cfg.LarkChatID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, m)
+	gitlabWebhookHandler := gitlabwebhook.New(s, a, cfg.GitLabSecret, cfg.LarkChatID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, m)
 	larkCallbackReceiver := larkcallback.New(s, a, cfg.LarkVerificationToken, cfg.LarkAppID, cfg.MaxBodyBytes, cfg.DedupeTTL, cfg.WebhookMaxInFlight, githubClient, client)
-	webhookServer := newServer(cfg.ListenAddr, webhookMux(webhookHandler, larkCallbackReceiver, cfg))
+	webhookServer := newServer(cfg.ListenAddr, webhookMux(webhookHandler, gitlabWebhookHandler, larkCallbackReceiver, cfg))
 	adminServer := newServer(cfg.AdminListenAddr, adminMux(s, a, worker, m, cfg))
 	errCh := make(chan error, 2)
 	go func() { errCh <- webhookServer.ListenAndServe() }()
@@ -118,6 +120,7 @@ func main() {
 		}
 	}
 	webhookHandler.Wait()
+	gitlabWebhookHandler.Wait()
 	larkCallbackReceiver.Wait()
 	cancel()
 	<-workerDone
@@ -197,9 +200,10 @@ func recoverArchives(ctx context.Context, a *archive.Archive, s *store.Store, lo
 	}
 }
 
-func webhookMux(handler *webhook.Handler, larkReceiver *larkcallback.Receiver, cfg config.Config) http.Handler {
+func webhookMux(handler *webhook.Handler, gitlabHandler *gitlabwebhook.Handler, larkReceiver *larkcallback.Receiver, cfg config.Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(cfg.WebhookPath, handler)
+	mux.Handle(cfg.GitLabWebhookPath, gitlabHandler)
 	mux.Handle(cfg.LarkEventPath, larkReceiver.EventHandler())
 	mux.Handle(cfg.LarkCallbackPath, larkReceiver.CallbackHandler())
 	return mux
