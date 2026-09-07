@@ -178,3 +178,51 @@ func TestLarkCallbackPathsDefaultAndCannotCollide(t *testing.T) {
 		}
 	}
 }
+
+func TestGitLabWebhookPathDefaultAndCannotCollide(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitLabWebhookPath != "/gitlab/webhook" {
+		t.Fatalf("GitLab path=%q", cfg.GitLabWebhookPath)
+	}
+	for _, paths := range []struct{ webhook, gitlab, event, callback string }{
+		{"/", "/gitlab/webhook", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/gitlab/webhook", "/gitlab/webhook", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/webhook", "/webhook", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/webhook", "/webhook/lark/event", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/webhook", "/webhook/lark/callback", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/webhook", "/", "/webhook/lark/event", "/webhook/lark/callback"},
+		{"/webhook", "webhook", "/webhook/lark/event", "/webhook/lark/callback"},
+	} {
+		t.Setenv("WEBHOOK_PATH", paths.webhook)
+		t.Setenv("GITLAB_WEBHOOK_PATH", paths.gitlab)
+		t.Setenv("LARK_EVENT_PATH", paths.event)
+		t.Setenv("LARK_CALLBACK_PATH", paths.callback)
+		if _, err := Load(); err == nil {
+			t.Fatalf("accepted paths %#v", paths)
+		}
+	}
+}
+
+func TestGitLabWebhookSecretIsOptionalAndTrimmed(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("GITLAB_WEBHOOK_SECRET", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitLabSecret != "" {
+		t.Fatalf("default GitLab secret=%q", cfg.GitLabSecret)
+	}
+	t.Setenv("GITLAB_WEBHOOK_SECRET", "  gitlab-secret  ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitLabSecret != "gitlab-secret" {
+		t.Fatalf("trimmed GitLab secret=%q", cfg.GitLabSecret)
+	}
+}

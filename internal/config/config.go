@@ -16,6 +16,7 @@ import (
 
 type Config struct {
 	GitHubSecret            string
+	GitLabSecret            string
 	GitHubAuditOrg          string
 	GitHubAuditToken        string
 	GitHubAuditPollInterval time.Duration
@@ -26,6 +27,7 @@ type Config struct {
 	ListenAddr              string
 	AdminListenAddr         string
 	WebhookPath             string
+	GitLabWebhookPath       string
 	LarkEventPath           string
 	LarkCallbackPath        string
 	DataDir                 string
@@ -51,6 +53,7 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		GitHubSecret:            os.Getenv("GITHUB_WEBHOOK_SECRET"),
+		GitLabSecret:            strings.TrimSpace(os.Getenv("GITLAB_WEBHOOK_SECRET")),
 		GitHubAuditOrg:          strings.TrimSpace(os.Getenv("GITHUB_AUDIT_ORG")),
 		GitHubAuditToken:        os.Getenv("GITHUB_AUDIT_TOKEN"),
 		GitHubAuditPollInterval: time.Minute,
@@ -61,6 +64,7 @@ func Load() (Config, error) {
 		ListenAddr:              value("LISTEN_ADDR", "127.0.0.1:8080"),
 		AdminListenAddr:         value("ADMIN_LISTEN_ADDR", "127.0.0.1:9090"),
 		WebhookPath:             value("WEBHOOK_PATH", "/webhook"),
+		GitLabWebhookPath:       value("GITLAB_WEBHOOK_PATH", "/gitlab/webhook"),
 		LarkEventPath:           value("LARK_EVENT_PATH", "/webhook/lark/event"),
 		LarkCallbackPath:        value("LARK_CALLBACK_PATH", "/webhook/lark/callback"),
 		DataDir:                 value("DATA_DIR", "/data"),
@@ -153,11 +157,11 @@ func Load() (Config, error) {
 	if !loopbackAddress(c.AdminListenAddr) {
 		return Config{}, errors.New("ADMIN_LISTEN_ADDR must use localhost or a loopback IP")
 	}
-	if !validWebhookPath(c.WebhookPath) || !validWebhookPath(c.LarkEventPath) || !validWebhookPath(c.LarkCallbackPath) {
-		return Config{}, errors.New("WEBHOOK_PATH, LARK_EVENT_PATH, and LARK_CALLBACK_PATH must be clean non-root absolute paths without query or fragment")
+	if !validWebhookPath(c.WebhookPath) || !validWebhookPath(c.GitLabWebhookPath) || !validWebhookPath(c.LarkEventPath) || !validWebhookPath(c.LarkCallbackPath) {
+		return Config{}, errors.New("WEBHOOK_PATH, GITLAB_WEBHOOK_PATH, LARK_EVENT_PATH, and LARK_CALLBACK_PATH must be clean non-root absolute paths without query or fragment")
 	}
-	if c.WebhookPath == c.LarkEventPath || c.WebhookPath == c.LarkCallbackPath || c.LarkEventPath == c.LarkCallbackPath {
-		return Config{}, errors.New("WEBHOOK_PATH, LARK_EVENT_PATH, and LARK_CALLBACK_PATH must be distinct")
+	if c.WebhookPath == c.GitLabWebhookPath || c.WebhookPath == c.LarkEventPath || c.WebhookPath == c.LarkCallbackPath || c.GitLabWebhookPath == c.LarkEventPath || c.GitLabWebhookPath == c.LarkCallbackPath || c.LarkEventPath == c.LarkCallbackPath {
+		return Config{}, errors.New("WEBHOOK_PATH, GITLAB_WEBHOOK_PATH, LARK_EVENT_PATH, and LARK_CALLBACK_PATH must be distinct")
 	}
 	if err := os.MkdirAll(c.DataDir, 0o750); err != nil {
 		return Config{}, fmt.Errorf("create data directory: %w", err)
