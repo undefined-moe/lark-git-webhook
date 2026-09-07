@@ -1,6 +1,6 @@
 # lark-git-webhook
 
-`lark-git-webhook` is a Linux-only, self-hosted GitHub webhook-to-Lark App IM API relay. It runs as one static Go binary with one local bbolt database; no Redis, Kafka, external database, or installer script is required.
+`lark-git-webhook` is a Linux-only, self-hosted GitHub and GitLab webhook-to-Lark App IM API relay. It runs as one static Go binary with one local bbolt database; no Redis, Kafka, external database, or installer script is required.
 
 ## Build
 
@@ -41,8 +41,11 @@ LARK_CHAT_ID='oc_your_lark_chat_id'
 LARK_VERIFICATION_TOKEN='your-lark-verification-token'
 # Optional public paths; these defaults must remain distinct.
 WEBHOOK_PATH='/webhook'
+GITLAB_WEBHOOK_PATH='/gitlab/webhook'
 LARK_EVENT_PATH='/webhook/lark/event'
 LARK_CALLBACK_PATH='/webhook/lark/callback'
+# Optional GitLab secret token. Empty accepts GitLab deliveries without one.
+GITLAB_WEBHOOK_SECRET=''
 # Optional; defaults to 8 simultaneous webhook requests.
 WEBHOOK_MAX_IN_FLIGHT='8'
 # Optional; defaults to 1073741824 (1 GiB).
@@ -64,9 +67,9 @@ sudo systemctl enable --now lark-git-webhook
 sudo systemctl status lark-git-webhook
 ```
 
-The unit uses `DynamicUser=yes`, `StateDirectory=lark-git-webhook`, and `DATA_DIR=/var/lib/lark-git-webhook`. It sets `LISTEN_ADDR=0.0.0.0:8080` for the public webhook, `WEBHOOK_PATH=/webhook`, `LARK_EVENT_PATH=/webhook/lark/event`, `LARK_CALLBACK_PATH=/webhook/lark/callback`, and `ADMIN_LISTEN_ADDR=127.0.0.1:9090` for administration. Startup rejects a non-loopback admin address and public paths that are invalid, root, or overlapping.
+The unit uses `DynamicUser=yes`, `StateDirectory=lark-git-webhook`, and `DATA_DIR=/var/lib/lark-git-webhook`. It sets `LISTEN_ADDR=0.0.0.0:8080` for the public webhook, `WEBHOOK_PATH=/webhook`, `LARK_EVENT_PATH=/webhook/lark/event`, `LARK_CALLBACK_PATH=/webhook/lark/callback`, and `ADMIN_LISTEN_ADDR=127.0.0.1:9090` for administration. `GITLAB_WEBHOOK_PATH` defaults to `/gitlab/webhook` and can be set in the environment file. Startup rejects a non-loopback admin address and public paths that are invalid, root, or overlapping.
 
-Put a TLS reverse proxy in front of the configured public paths (for example `http://127.0.0.1:8080/webhook`, `http://127.0.0.1:8080/webhook/lark/event`, and `http://127.0.0.1:8080/webhook/lark/callback`). Configure GitHub with the matching public Payload URL, content type `application/json`, SSL verification enabled, the matching secret, and **Send me everything**.
+Put a TLS reverse proxy in front of the configured public paths (for example `http://127.0.0.1:8080/webhook`, `http://127.0.0.1:8080/gitlab/webhook`, `http://127.0.0.1:8080/webhook/lark/event`, and `http://127.0.0.1:8080/webhook/lark/callback`). Configure GitHub with the matching public Payload URL, content type `application/json`, SSL verification enabled, the matching secret, and **Send me everything**.
 
 When audit polling is first enabled, the service stores the current time as its checkpoint and monitors only subsequent audit records; it never replays historical records. Audit records are durably archived and use the normal outbound Lark queue, batching, and rate limits.
 
@@ -77,6 +80,26 @@ Set `MAXMIND_CITY_DB_PATH` to a local GeoLite2-City or GeoIP2-City `.mmdb` file 
 The supplied unit uses `DynamicUser=yes` and `ProtectHome=yes`, so it cannot read the recommended `/root` path directly. For that unit, use a private file below `/var/lib/lark-git-webhook` or a dedicated read-only bind mount, then set `MAXMIND_CITY_DB_PATH` to that readable location.
 
 The webhook listener serves only `POST` on `WEBHOOK_PATH`. `X-GitHub-Delivery` permits up to 128 safe identifier characters; `X-GitHub-Event` permits up to 64 letters, digits, `_`, or `-`.
+
+### GitLab webhook
+
+The service relays GitLab project webhooks as a second source with its own endpoint, secret, permanent archive, and Lark delivery. In GitLab (project **Settings → Webhooks**) point the URL at the public `GITLAB_WEBHOOK_PATH` URL (default `/gitlab/webhook`), use content type `application/json`, enable SSL verification, and select the events you want relayed. GitLab sends each delivery with an `X-Gitlab-Event` header naming the event type. Optionally set a **Secret token** in GitLab and the matching `GITLAB_WEBHOOK_SECRET`; when the secret is set, deliveries must carry the matching plain-text `X-Gitlab-Token` header, which the service compares in constant time. An empty `GITLAB_WEBHOOK_SECRET` accepts deliveries without a secret token — convenient behind a firewall, but use the secret token (or network isolation) on a public endpoint. GitLab's newer Standard Webhooks signing-token signature (`webhook-signature`) is not supported; keep using a secret token.
+
+Deliveries are permanently archived before the `202` response under `${DATA_DIR}/archive/<delivery>/payload.<event>.json` with events named `gitlab:push`, `gitlab:tag_push`, `gitlab:pipeline`, and `gitlab:merge_request` (other event names are `gitlab:` plus the normalized header value). Delivery identity comes from GitLab's `X-Gitlab-Event-UUID` header when present and valid; otherwise the service derives a stable ID from the event name and the payload digest, so an identical redelivery without a UUID is recognized and answered `202` without a duplicate queue entry, while a conflicting event or payload for the same delivery returns `409`. GitLab auto-retries failed deliveries and disables webhooks after repeated failures, so the endpoint stays fast and returns only the codes above for handled deliveries.
+
+Supported event matrix:
+
+| GitLab event | Delivery |
+| --- | --- |
+| **Push Hook** | One Lark post message with the project path, branch, abbreviated before/after SHA range, commit count, sanitized newest-commit message, pusher, newest-commit time, and a compare/commit link. |
+| **Tag Push Hook** | One Lark post message with the project path, tag name, abbreviated range, commit count, tag message, pusher, and a link to the tag page. |
+| **Pipeline Hook** | One persistent interactive card per project and pipeline, updated in place (see below). |
+| **Merge Request Hook** | One Lark post message per action with the project path, MR number and title, acting user, source → target branch, state, updated time, and the MR URL. |
+| **All other GitLab events** | Authenticated and validated, then permanently archived only — never forwarded to Lark (like the existing GitHub archive-only events). |
+
+GitLab payload counts follow GitLab's truncation rules: pushes above 20 commits report the real `total_commits_count` with only the newest commits included, and empty branch pushes have no commits. Pipeline deliveries fire for every status change, so a single pipeline produces several deliveries; the card machinery converges on the final state and drains stale duplicates without touching Lark.
+
+Pipeline cards mirror the GitHub workflow/check-run cards. The card title is the pipeline name or project path; its body shows the pipeline URL, status, project, ref, and commit. Queued, pending, and running pipelines render a blue in-progress card without a reaction. A completed pipeline updates the card and then adds its status reaction: `success` → `DONE`; `failed` → `ERROR`; `canceled` and `skipped` → `CrossMark`. Each pipeline card is stored durably per chat under a `gitlab:`-namespaced repository ID and its pipeline ID, so GitLab project/pipeline pairs can never collide with GitHub repository/check-suite pairs that share numeric IDs, and a delayed duplicate of an earlier stage never regresses a card. The `/metrics` endpoint includes the shared workflow card and reaction counters plus the GitLab-specific webhook and event counters below.
 
 ### Lark inbound events and callbacks
 
@@ -95,9 +118,9 @@ curl -fsS http://127.0.0.1:9090/metrics
 journalctl -u lark-git-webhook -f
 ```
 
-Do not expose port 9090 in a public firewall rule or proxy. GitHub deliveries are durable before `202`; authenticated Lark events and callbacks are durable before `200`. Delivery is at least once, and outbound Lark limits are preserved across restarts at 5/s and 100/min. If `/readyz` stays unavailable after a queue-state persistence failure, restart the service after fixing the underlying storage issue. A Lark `Retry-After`, including the transient `99991400` response code, creates a persistent cooldown. HTTP error responses are decoded as Lark envelopes; invalid app credentials (including code `10014`) are permanent. The app exchanges `LARK_APP_ID` and `LARK_APP_SECRET` for a tenant access token and caches it until one minute before expiry; tokens are refreshed after an authorization failure.
+Do not expose port 9090 in a public firewall rule or proxy. GitHub and GitLab webhook deliveries are durable before `202`; authenticated Lark events and callbacks are durable before `200`. Delivery is at least once, and outbound Lark limits are preserved across restarts at 5/s and 100/min. If `/readyz` stays unavailable after a queue-state persistence failure, restart the service after fixing the underlying storage issue. A Lark `Retry-After`, including the transient `99991400` response code, creates a persistent cooldown. HTTP error responses are decoded as Lark envelopes; invalid app credentials (including code `10014`) are permanent. The app exchanges `LARK_APP_ID` and `LARK_APP_SECRET` for a tenant access token and caches it until one minute before expiry; tokens are refreshed after an authorization failure.
 
-Deduplication is best-effort within `DEDUPE_TTL`: reaching `DEDUPE_MAX_ITEMS` evicts earliest-expiring records, so strict TTL-wide deduplication is not guaranteed. Queue overflow returns `503`; **GitHub does not automatically retry failed webhook deliveries**. After recovery, redeliver from the GitHub UI or API.
+Deduplication is best-effort within `DEDUPE_TTL`: reaching `DEDUPE_MAX_ITEMS` evicts earliest-expiring records, so strict TTL-wide deduplication is not guaranteed. Queue overflow returns `503`; **GitHub does not automatically retry failed webhook deliveries**. After recovery, redeliver from the GitHub UI or API. GitLab retries failed deliveries for a limited period and auto-disables webhooks after repeated failures; send a test request that returns `2xx` to re-enable one.
 
 Normal GitHub events retain their existing post formatting and batching. App IM post content is the locale map expected by Lark (for example `{"zh_cn": ...}`), not an additional `post` wrapper. `workflow_run` and `check_run` maintain one durable interactive card per GitHub repository ID and check-suite ID and update that card in place. Cards opt into `update_multi`, render the workflow attempt, and use the run ID, branch, SHA, and check timestamps to avoid stale updates. A rerun with a higher attempt clears its prior checks and conclusion. Completed runs update the card before adding the status reaction: `success` → `DONE`; `failure`, `timed_out`, and `action_required` → `ERROR`; `cancelled`, `skipped`, `neutral`, and `stale` → `CrossMark`. A queued or in-progress rerun removes a prior reaction; a completed failure adds `ERROR`. `workflow_job` and `check_suite` payloads are permanently archived but intentionally do not send a Lark message. The `/metrics` endpoint includes workflow card and reaction counters.
 
@@ -131,6 +154,8 @@ sudo python3 -m json.tool /var/lib/lark-git-webhook/archive/YW/YWItZGVsaXZlcnk/p
 ```
 
 For push troubleshooting, first check `lark_git_webhook_events_received_total{event="push"}` and the archived `payload.push.json` files to confirm GitHub sent the event. The Lark message shows the branch or ref, abbreviated before/after SHA range, commit count, sanitized head-commit message, sender, and GitHub compare link. Branch/ref and commit details are included when GitHub provides them.
+
+For GitLab troubleshooting, first check `lark_git_webhook_gitlab_events_received_total{event="push"}` (or `tag_push`, `pipeline`, `merge_request`) and the archived `payload.gitlab:push.json` files to confirm GitLab delivered the event. GitLab-specific series are `lark_git_webhook_gitlab_webhooks_received_total`, `lark_git_webhook_gitlab_webhooks_verification_failed_total`, `lark_git_webhook_gitlab_webhooks_duplicates_total`, `lark_git_webhook_gitlab_webhooks_rejected_total`, `lark_git_webhook_gitlab_events_received_total{event="..."}`, and `lark_git_webhook_gitlab_events_delivered_total{event="..."}` with fixed `push`, `tag_push`, `pipeline`, `merge_request`, and `other` labels. GitLab card operations count under the shared workflow card/reaction counters. Repository subscribers configured with `/github-add owner/repo` also receive GitLab deliveries for the matching lowercased project path.
 
 ## Upgrade and backup
 
