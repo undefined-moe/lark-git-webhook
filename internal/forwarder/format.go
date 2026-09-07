@@ -100,6 +100,9 @@ func format(item store.Item, lookup GeoLookup) string {
 	if item.Event == "audit_log" {
 		return formatAuditLog(item.RawJSON, lookup)
 	}
+	if strings.HasPrefix(item.Event, "gitlab:") {
+		return formatGitlab(item)
+	}
 	var p githubPayload
 	_ = json.Unmarshal(item.RawJSON, &p)
 	repo, sender := fallback(sanitize(p.Repository.FullName), "unknown repository"), mention(p.Sender.Login)
@@ -393,6 +396,9 @@ func richText(line string) []lark.Text {
 func richTextForRepo(line, inheritedRepo string) []lark.Text {
 	if strings.HasPrefix(line, "[audit:") {
 		return []lark.Text{{Tag: "text", Text: line}}
+	}
+	if strings.HasPrefix(line, "[gitlab:") {
+		return gitlabRichText(line)
 	}
 	parts := strings.Split(line, " | ")
 	if len(parts) == 0 {
