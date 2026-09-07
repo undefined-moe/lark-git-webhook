@@ -14,11 +14,21 @@ var eventCategories = [eventCount]string{
 	"check_run", "check_suite", "create", "delete", "deployment", "deployment_status", "discussion", "fork", "gollum", "installation", "installation_repositories", "issue_comment", "issues", "member", "membership", "package", "ping", "project", "pull_request", "push", "release", "repository", "repository_dispatch", "workflow_job", "workflow_run",
 }
 
+const gitlabEventCount = 4
+
+var gitlabEventCategories = [gitlabEventCount]string{
+	"push", "tag_push", "pipeline", "merge_request",
+}
+
 type Metrics struct {
 	received         atomic.Uint64
 	verificationFail atomic.Uint64
 	duplicates       atomic.Uint64
 	rejected         atomic.Uint64
+	gitlabReceived   atomic.Uint64
+	gitlabVerifyFail atomic.Uint64
+	gitlabDuplicates atomic.Uint64
+	gitlabRejected   atomic.Uint64
 	larkSuccess      atomic.Uint64
 	larkFailure      atomic.Uint64
 	retries          atomic.Uint64
@@ -30,6 +40,8 @@ type Metrics struct {
 	lastErrorUnix    atomic.Int64
 	eventsReceived   [eventCount + 1]atomic.Uint64
 	eventsDelivered  [eventCount + 1]atomic.Uint64
+	gitlabEventsRecv [gitlabEventCount + 1]atomic.Uint64
+	gitlabEventsDone [gitlabEventCount + 1]atomic.Uint64
 }
 
 type Snapshot struct {
@@ -47,6 +59,10 @@ func (m *Metrics) Received()                   { m.received.Add(1) }
 func (m *Metrics) VerificationFailed()         { m.verificationFail.Add(1) }
 func (m *Metrics) Duplicate()                  { m.duplicates.Add(1) }
 func (m *Metrics) Rejected()                   { m.rejected.Add(1) }
+func (m *Metrics) GitlabReceived()             { m.gitlabReceived.Add(1) }
+func (m *Metrics) GitlabVerificationFailed()   { m.gitlabVerifyFail.Add(1) }
+func (m *Metrics) GitlabDuplicate()            { m.gitlabDuplicates.Add(1) }
+func (m *Metrics) GitlabRejected()             { m.gitlabRejected.Add(1) }
 func (m *Metrics) LarkSuccess()                { m.larkSuccess.Add(1) }
 func (m *Metrics) LarkFailure()                { m.larkFailure.Add(1); m.lastErrorUnix.Store(time.Now().Unix()) }
 func (m *Metrics) Retry()                      { m.retries.Add(1) }
@@ -57,6 +73,16 @@ func (m *Metrics) WorkflowReactionAdded()      { m.reactionAdded.Add(1) }
 func (m *Metrics) WorkflowReactionDeleted()    { m.reactionDeleted.Add(1) }
 func (m *Metrics) EventReceived(event string)  { m.eventsReceived[eventIndex(event)].Add(1) }
 func (m *Metrics) EventDelivered(event string) { m.eventsDelivered[eventIndex(event)].Add(1) }
+
+// GitlabEventReceived and GitlabEventDelivered count deliveries whose event
+// label carries the "gitlab:" prefix; the label prefix is dropped for the
+// fixed-category series.
+func (m *Metrics) GitlabEventReceived(event string) {
+	m.gitlabEventsRecv[gitlabEventIndex(event)].Add(1)
+}
+func (m *Metrics) GitlabEventDelivered(event string) {
+	m.gitlabEventsDone[gitlabEventIndex(event)].Add(1)
+}
 
 func (m *Metrics) Handler(snapshot func() Snapshot) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -69,6 +95,12 @@ func (m *Metrics) Handler(snapshot func() Snapshot) http.HandlerFunc {
 			counter("lark_git_webhook_webhooks_rejected_total", m.rejected.Load()),
 			eventCounter("lark_git_webhook_events_received_total", &m.eventsReceived),
 			eventCounter("lark_git_webhook_events_delivered_total", &m.eventsDelivered),
+			counter("lark_git_webhook_gitlab_webhooks_received_total", m.gitlabReceived.Load()),
+			counter("lark_git_webhook_gitlab_webhooks_verification_failed_total", m.gitlabVerifyFail.Load()),
+			counter("lark_git_webhook_gitlab_webhooks_duplicates_total", m.gitlabDuplicates.Load()),
+			counter("lark_git_webhook_gitlab_webhooks_rejected_total", m.gitlabRejected.Load()),
+			gitlabEventCounter("lark_git_webhook_gitlab_events_received_total", &m.gitlabEventsRecv),
+			gitlabEventCounter("lark_git_webhook_gitlab_events_delivered_total", &m.gitlabEventsDone),
 			counter("lark_git_webhook_lark_requests_success_total", m.larkSuccess.Load()),
 			counter("lark_git_webhook_lark_requests_failure_total", m.larkFailure.Load()),
 			counter("lark_git_webhook_retries_total", m.retries.Load()),
@@ -100,12 +132,33 @@ func eventIndex(event string) int {
 	return eventCount
 }
 
+func gitlabEventIndex(event string) int {
+	if !strings.HasPrefix(event, "gitlab:") {
+		return gitlabEventCount
+	}
+	category := strings.TrimPrefix(event, "gitlab:")
+	for i, candidate := range gitlabEventCategories {
+		if category == candidate {
+			return i
+		}
+	}
+	return gitlabEventCount
+}
+
 func eventCounter(name string, values *[eventCount + 1]atomic.Uint64) string {
 	lines := []string{fmt.Sprintf("# TYPE %s counter", name)}
 	for i, category := range eventCategories {
 		lines = append(lines, fmt.Sprintf("%s{event=%q} %d", name, category, values[i].Load()))
 	}
 	return strings.Join(append(lines, fmt.Sprintf("%s{event=%q} %d", name, "other", values[eventCount].Load())), "\n")
+}
+
+func gitlabEventCounter(name string, values *[gitlabEventCount + 1]atomic.Uint64) string {
+	lines := []string{fmt.Sprintf("# TYPE %s counter", name)}
+	for i, category := range gitlabEventCategories {
+		lines = append(lines, fmt.Sprintf("%s{event=%q} %d", name, category, values[i].Load()))
+	}
+	return strings.Join(append(lines, fmt.Sprintf("%s{event=%q} %d", name, "other", values[gitlabEventCount].Load())), "\n")
 }
 
 func counter(name string, value uint64) string {
