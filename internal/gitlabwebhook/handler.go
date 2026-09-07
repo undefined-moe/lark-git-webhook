@@ -25,10 +25,10 @@ import (
 // Event labels queued for Lark delivery. The "gitlab:" prefix lets the worker
 // dispatch GitLab events and attribute their metrics independently of GitHub.
 const (
-	EventPush         = "gitlab:push"
-	EventTagPush      = "gitlab:tag_push"
-	EventPipeline     = "gitlab:pipeline"
-	EventMergeRequest = "gitlab:merge_request"
+	eventPush         = "gitlab:push"
+	eventTagPush      = "gitlab:tag_push"
+	eventPipeline     = "gitlab:pipeline"
+	eventMergeRequest = "gitlab:merge_request"
 	eventLabelPrefix  = "gitlab:"
 	eventHeaderMax    = 64
 	deliveryIDMax     = 128
@@ -37,7 +37,7 @@ const (
 // deliveredEvents are the GitLab event types forwarded to Lark; any other
 // validated event is admitted archive-only.
 var deliveredEvents = map[string]bool{
-	EventPush: true, EventTagPush: true, EventPipeline: true, EventMergeRequest: true,
+	eventPush: true, eventTagPush: true, eventPipeline: true, eventMergeRequest: true,
 }
 
 type Handler struct {
