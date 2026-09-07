@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -110,6 +111,13 @@ func (w *Worker) Run(ctx context.Context) {
 				case stopRound:
 					goto nextRound
 				}
+			case "gitlab:pipeline":
+				switch w.sendGitlabPipelines(ctx, item) {
+				case stopWorker:
+					return
+				case stopRound:
+					goto nextRound
+				}
 			case "lark_event":
 				switch w.sendOnboarding(ctx, item) {
 				case stopWorker:
@@ -132,6 +140,16 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) Alive(_ time.Time) bool { return w.running.Load() }
+
+// countDelivered attributes a successful delivery to the GitHub or the GitLab
+// event counter series depending on the event label prefix.
+func (w *Worker) countDelivered(event string) {
+	if strings.HasPrefix(event, "gitlab:") {
+		w.metrics.GitlabEventDelivered(event)
+		return
+	}
+	w.metrics.EventDelivered(event)
+}
 
 func (w *Worker) sendBatch(ctx context.Context, items []store.Item) batchResult {
 	return w.sendBatchToChat(ctx, "", items)
@@ -167,7 +185,7 @@ func (w *Worker) sendBatchToChat(ctx context.Context, chatID string, items []sto
 		}
 		w.metrics.LarkSuccess()
 		for _, item := range items {
-			w.metrics.EventDelivered(item.Event)
+			w.countDelivered(item.Event)
 		}
 		return continueRound
 	}

@@ -122,13 +122,22 @@ func (w *Worker) sendWorkflowToChat(ctx context.Context, item store.Item, chatID
 	if err != nil {
 		return w.workflowFailure(item, fmt.Errorf("persist workflow state: %w", err))
 	}
-	card := makeWorkflowCard(state)
+	return w.sendCardToChat(ctx, item, chatID, state, makeWorkflowCard, workflowReaction, workflowUUID, w.countDelivered)
+}
+
+// sendCardToChat delivers one durable interactive card state to a chat: it
+// creates the card with a deterministic UUID on the first delivery and updates
+// it in place afterwards, then reconciles the status reaction. It is shared by
+// the GitHub workflow/check-run path and the GitLab pipeline path.
+func (w *Worker) sendCardToChat(ctx context.Context, item store.Item, chatID string, state store.WorkflowState, buildCard func(store.WorkflowState) map[string]any, reactionFor func(string) string, uuidFor func(string) string, delivered func(string)) batchResult {
+	card := buildCard(state)
 	messageID := state.MessageID
 	if messageID == "" {
 		if result := w.reserveWorkflowRequest(ctx, item); result != continueRound {
 			return result
 		}
-		messageID, err = w.createInteractive(ctx, chatID, card, workflowUUID(state.Key))
+		var err error
+		messageID, err = w.createInteractive(ctx, chatID, card, uuidFor(state.Key))
 		if err == nil {
 			err = w.store.SetWorkflowMessage(state.Key, messageID)
 		}
@@ -147,7 +156,7 @@ func (w *Worker) sendWorkflowToChat(ctx context.Context, item store.Item, chatID
 		w.metrics.WorkflowCardUpdated()
 		w.metrics.LarkSuccess()
 	}
-	reaction := workflowReaction(state.Conclusion)
+	reaction := reactionFor(state.Conclusion)
 	if state.ReactionID != "" && reaction != state.ReactionType {
 		if result := w.reserveWorkflowRequest(ctx, item); result != continueRound {
 			return result
@@ -180,7 +189,7 @@ func (w *Worker) sendWorkflowToChat(ctx context.Context, item store.Item, chatID
 		w.logger.Error("record delivered workflow chat target", "error", err)
 		return stopWorker
 	}
-	w.metrics.EventDelivered(item.Event)
+	delivered(item.Event)
 	return continueRound
 }
 
@@ -297,17 +306,9 @@ func makeWorkflowCard(state store.WorkflowState) map[string]any {
 }
 
 func cardTemplate(conclusion string) string {
-	switch workflowReaction(conclusion) {
-	case "DONE":
-		return "green"
-	case "ERROR":
-		return "red"
-	case "CrossMark":
-		return "grey"
-	default:
-		return "blue"
-	}
+	return reactionTemplate(workflowReaction(conclusion))
 }
+
 func workflowText(value string) string {
 	value = strings.Map(func(r rune) rune {
 		if r < 32 || r == 127 {
