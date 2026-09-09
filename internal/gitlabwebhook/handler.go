@@ -1,8 +1,12 @@
-// Package gitlabwebhook receives GitLab project webhook deliveries and feeds
-// them through the same durable store, permanent archive, and delivery queue
-// used for GitHub events. Push, tag push, pipeline, and merge request events
-// are queued for Lark delivery; every other GitLab event type is
-// authenticated, validated, and permanently archived but never forwarded.
+// Package gitlabwebhook receives GitLab webhook deliveries (project, group,
+// and system hooks) and feeds them through the same durable store, permanent
+// archive, and delivery queue used for GitHub events. Push, tag push,
+// pipeline, and merge request events are queued for Lark delivery; every other
+// GitLab event type is authenticated, validated, and permanently archived but
+// never forwarded. System hooks label every delivery with the same
+// X-Gitlab-Event header ("System Hook"), so their real event type is read from
+// the payload body; supported system-hook kinds (push, tag push, merge
+// request) are forwarded exactly like the equivalent project-webhook events.
 package gitlabwebhook
 
 import (
@@ -32,6 +36,9 @@ const (
 	eventLabelPrefix  = "gitlab:"
 	eventHeaderMax    = 64
 	deliveryIDMax     = 128
+	// systemHookHeader is the normalized X-Gitlab-Event value GitLab sends for
+	// every system-hook delivery regardless of the underlying event type.
+	systemHookHeader = "system_hook"
 )
 
 // deliveredEvents are the GitLab event types forwarded to Lark; any other
@@ -93,6 +100,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.metrics.GitlabRejected()
 		http.Error(w, "missing or invalid X-Gitlab-Event header", http.StatusBadRequest)
 		return
+	}
+	if event == eventLabelPrefix+systemHookHeader {
+		event = systemHookEvent(body, event)
 	}
 	deliveryID := deliveryIDFor(r.Header.Get("X-Gitlab-Event-UUID"), event, body)
 	if !json.Valid(body) {
@@ -234,6 +244,39 @@ func eventLabel(header string) (string, error) {
 		}
 	}
 	return eventLabelPrefix + name, nil
+}
+
+// systemHookEvent maps a System Hook payload to the canonical delivered-event
+// label. GitLab sends every system-hook delivery with the same X-Gitlab-Event
+// header value, so the underlying type must come from the body: object_kind
+// for merge requests and pipeline-shaped payloads, event_name for pushes and
+// tag pushes (both fields are present on push payloads). Supported kinds
+// return the same labels as project webhooks so they are forwarded to Lark;
+// all other system events keep the caller-provided fallback (the archive-only
+// system_hook label).
+func systemHookEvent(body []byte, fallback string) string {
+	var payload struct {
+		ObjectKind string `json:"object_kind"`
+		EventName  string `json:"event_name"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return fallback
+	}
+	kind := payload.ObjectKind
+	if kind == "" {
+		kind = payload.EventName
+	}
+	switch kind {
+	case "push":
+		return eventPush
+	case "tag_push":
+		return eventTagPush
+	case "pipeline":
+		return eventPipeline
+	case "merge_request":
+		return eventMergeRequest
+	}
+	return fallback
 }
 
 // deliveryIDFor prefers GitLab's X-Gitlab-Event-UUID when it is present and

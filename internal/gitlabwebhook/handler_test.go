@@ -69,6 +69,69 @@ func TestEventLabelMapping(t *testing.T) {
 	}
 }
 
+func TestSystemHookEventMapping(t *testing.T) {
+	fallback := "gitlab:system_hook"
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{name: "push object kind", body: []byte(`{"object_kind":"push","event_name":"push"}`), want: "gitlab:push"},
+		{name: "tag push object kind", body: []byte(`{"object_kind":"tag_push","event_name":"tag_push"}`), want: "gitlab:tag_push"},
+		{name: "pipeline object kind", body: []byte(`{"object_kind":"pipeline"}`), want: "gitlab:pipeline"},
+		{name: "merge request object kind", body: []byte(`{"object_kind":"merge_request"}`), want: "gitlab:merge_request"},
+		{name: "repository update event name only", body: []byte(`{"event_name":"repository_update"}`), want: fallback},
+		{name: "unknown kind", body: []byte(`{"object_kind":"user_create"}`), want: fallback},
+		{name: "empty body", body: []byte(``), want: fallback},
+		{name: "invalid json", body: []byte(`{`), want: fallback},
+		{name: "non object json", body: []byte(`[]`), want: fallback},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := systemHookEvent(tc.body, fallback); got != tc.want {
+				t.Fatalf("systemHookEvent(%s)=%q want=%q", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSystemHookDeliveriesClassifiedByBody(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       []byte
+		wantEvent  string
+		wantQueued int
+	}{
+		{name: "push system hook relayed", body: []byte(`{"object_kind":"push","event_name":"push","project":{"path_with_namespace":"acme/repo"}}`), wantEvent: "gitlab:push", wantQueued: 1},
+		{name: "tag push system hook relayed", body: []byte(`{"object_kind":"tag_push","event_name":"tag_push","project":{"path_with_namespace":"acme/repo"}}`), wantEvent: "gitlab:tag_push", wantQueued: 1},
+		{name: "merge request system hook relayed", body: []byte(`{"object_kind":"merge_request","object_attributes":{"action":"open"},"project":{"path_with_namespace":"acme/repo"}}`), wantEvent: "gitlab:merge_request", wantQueued: 1},
+		{name: "repository update archived only", body: []byte(`{"event_name":"repository_update","project":{"path_with_namespace":"acme/repo"}}`), wantEvent: "gitlab:system_hook", wantQueued: 0},
+		{name: "user create archived only", body: []byte(`{"event_name":"user_create"}`), wantEvent: "gitlab:system_hook", wantQueued: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, a, archiveRoot := openFixture(t)
+			h := New(s, a, "", "oc_default", 1<<20, time.Hour, 8, &metrics.Metrics{})
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, gitlabRequest(http.MethodPost, "/gitlab/webhook", tc.body, map[string]string{"X-Gitlab-Event": "System Hook", "X-Gitlab-Event-UUID": "syshook-1111-2222-4333-8444-555555555555"}))
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("status=%d", w.Code)
+			}
+			items, err := s.Due(time.Now(), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != tc.wantQueued {
+				t.Fatalf("queued=%d want=%d items=%+v", len(items), tc.wantQueued, items)
+			}
+			if tc.wantQueued == 1 && items[0].Event != tc.wantEvent {
+				t.Fatalf("event=%q want=%q", items[0].Event, tc.wantEvent)
+			}
+			if archived := archivedPayloadFile(t, archiveRoot, tc.body); archived == "" {
+				t.Fatal("delivery was not archived")
+			}
+		})
+	}
+}
+
 func TestHandlerValidatesTokenSemantics(t *testing.T) {
 	body := []byte(`{"object_kind":"push","project":{"path_with_namespace":"acme/repo"}}`)
 	for _, tc := range []struct {
