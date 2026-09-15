@@ -274,15 +274,22 @@ func parseGitlabTime(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// gitlabRichText renders a GitLab event line for a Lark post. Every " | "
-// segment that is a standalone https URL becomes a clickable link; all other
-// content is plain text (repository and commit URLs are never fabricated).
+// gitlabRichText renders a GitLab event line for a Lark post. The repository
+// in the header links to the project page (or its branch tree page) when the
+// line carries the project URL; every " | " segment that is a standalone https
+// URL becomes a clickable link; all other content is plain text.
 func gitlabRichText(line string) []lark.Text {
 	parts := strings.Split(line, " | ")
 	segments := make([]lark.Text, 0, len(parts)*2)
 	for i, part := range parts {
 		if i > 0 {
 			segments = append(segments, lark.Text{Tag: "text", Text: " | "})
+		}
+		if i == 0 {
+			if linked := gitlabRepoSegment(line, part); linked != nil {
+				segments = append(segments, linked...)
+				continue
+			}
 		}
 		if gitlabHTTPSURL(part) {
 			segments = append(segments, lark.Text{Tag: "a", Text: strings.TrimPrefix(part, "https://"), Href: part})
@@ -291,6 +298,41 @@ func gitlabRichText(line string) []lark.Text {
 		}
 	}
 	return segments
+}
+
+// gitlabRepoSegment splits the header "[gitlab:…] user/repo[/branch]" into a
+// plain-text label and a repository link derived from the line's project URL;
+// a branch suffix links to the instance tree page of that branch.
+func gitlabRepoSegment(line, header string) []lark.Text {
+	base := gitlabProjectBase(line)
+	if base == "" {
+		return nil
+	}
+	marker := strings.Index(header, "] ")
+	if marker < 0 {
+		return nil
+	}
+	displayRepo := header[marker+2:]
+	if displayRepo == "" || displayRepo == "unknown repository" {
+		return nil
+	}
+	href := base
+	_, projectPath, _ := strings.Cut(strings.TrimPrefix(base, "https://"), "/")
+	if suffix, ok := strings.CutPrefix(displayRepo, projectPath+"/"); ok && projectPath != "" {
+		href = gitlabBranchURL(base, suffix)
+	}
+	return []lark.Text{
+		{Tag: "text", Text: header[:marker+2]},
+		{Tag: "a", Text: displayRepo, Href: href},
+	}
+}
+
+func gitlabBranchURL(base, branch string) string {
+	segments := strings.Split(branch, "/")
+	for i := range segments {
+		segments[i] = url.PathEscape(segments[i])
+	}
+	return base + "/-/tree/" + strings.Join(segments, "/")
 }
 
 func gitlabHTTPSURL(value string) bool {

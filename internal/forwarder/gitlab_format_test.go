@@ -164,12 +164,67 @@ func TestMakeMessageLinksOnlyStandaloneGitlabHTTPSURLs(t *testing.T) {
 func TestMakeMessageGitlabRendersNoGithubLinks(t *testing.T) {
 	line := "[gitlab:merge_request:merge] gitlabhq/gitlab-test | MR !1 MS-Viewport | by @root | ms-viewport → master | https://gitlab.example.com/gitlabhq/gitlab-test/-/merge_requests/1"
 	segments := MakeMessage([]string{line}).Content.Post["zh_cn"].Content[0]
+	allowed := map[string]bool{
+		"https://gitlab.example.com/gitlabhq/gitlab-test":                    true,
+		"https://gitlab.example.com/gitlabhq/gitlab-test/-/merge_requests/1": true,
+	}
 	for _, segment := range segments {
-		if segment.Href != "" && segment.Href != "https://gitlab.example.com/gitlabhq/gitlab-test/-/merge_requests/1" {
+		if segment.Href != "" && !allowed[segment.Href] {
 			t.Fatalf("unexpected link href %+v", segment)
 		}
 		if strings.Contains(segment.Text, "github.com") {
 			t.Fatalf("github URL fabricated in %+v", segment)
+		}
+	}
+}
+
+func TestMakeMessageLinksGitlabRepositoryHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		line     string
+		repoText string
+		repoHref string
+	}{
+		{
+			name:     "branch push links to tree page",
+			line:     "[gitlab:push] group/project/main | 1111111..2222222 | 1 commit | @root | https://gitlab.example.com/group/project/-/compare/1111111111111111111111111111111111111111...2222222222222222222222222222222222222222",
+			repoText: "group/project/main",
+			repoHref: "https://gitlab.example.com/group/project/-/tree/main",
+		},
+		{
+			name:     "subgroup branch push links to tree page",
+			line:     "[gitlab:push] group/sub/repo/feat/x | 1111111..2222222 | @root | https://gitlab.example.com/group/sub/repo/-/compare/1111111111111111111111111111111111111111...2222222222222222222222222222222222222222",
+			repoText: "group/sub/repo/feat/x",
+			repoHref: "https://gitlab.example.com/group/sub/repo/-/tree/feat/x",
+		},
+		{
+			name:     "tag push links to project page",
+			line:     "[gitlab:tag_push] jsmith/example | tag v1.0.0 | @jsmith | https://gitlab.example.com/jsmith/example/-/tags/v1.0.0",
+			repoText: "jsmith/example",
+			repoHref: "https://gitlab.example.com/jsmith/example",
+		},
+		{
+			name:     "merge request links to project page",
+			line:     "[gitlab:merge_request:open] gitlabhq/gitlab-test | MR !1 MS-Viewport | https://gitlab.example.com/gitlabhq/gitlab-test/-/merge_requests/1",
+			repoText: "gitlabhq/gitlab-test",
+			repoHref: "https://gitlab.example.com/gitlabhq/gitlab-test",
+		},
+		{
+			name:     "no project URL leaves repository as plain text",
+			line:     "[gitlab:push] group/project/main | 1111111..2222222 | @root",
+			repoText: "group/project/main",
+			repoHref: "",
+		},
+	} {
+		segments := MakeMessage([]string{tc.line}).Content.Post["zh_cn"].Content[0]
+		var href string
+		for _, segment := range segments {
+			if segment.Text == tc.repoText {
+				href = segment.Href
+			}
+		}
+		if href != tc.repoHref {
+			t.Fatalf("%s: repository link=%q want %q in %+v", tc.name, href, tc.repoHref, segments)
 		}
 	}
 }
