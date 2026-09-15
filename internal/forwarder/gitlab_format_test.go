@@ -246,6 +246,25 @@ func TestMakeMessageLinksGitlabCommitLinesToInstance(t *testing.T) {
 	}
 }
 
+func TestMakeMessageAttachesGitlabPushLinkToSHARange(t *testing.T) {
+	const compareURL = "https://gitlab.example.com/group/project/-/compare/1111111111111111111111111111111111111111...2222222222222222222222222222222222222222"
+	line := "[gitlab:push] group/project/main | 1111111..2222222 | 1 commit | @root | " + compareURL
+	segments := MakeMessage([]string{line}).Content.Post["zh_cn"].Content[0]
+	var text strings.Builder
+	for _, segment := range segments {
+		text.WriteString(segment.Text)
+		if segment.Text == "1111111..2222222" && (segment.Tag != "a" || segment.Href != compareURL) {
+			t.Fatalf("SHA range not linked to compare URL: %+v", segment)
+		}
+	}
+	if strings.Contains(text.String(), "https://") {
+		t.Fatalf("trailing URL still displayed: %q", text.String())
+	}
+	if want := "[gitlab:push] group/project/main | 1111111..2222222 | 1 commit | @root"; text.String() != want {
+		t.Fatalf("visible text=%q want %q", text.String(), want)
+	}
+}
+
 func TestFormatGitlabPushFitsMessageLimit(t *testing.T) {
 	item := store.Item{Event: "gitlab:push", RawJSON: []byte(`{
 		"ref": "refs/heads/main",

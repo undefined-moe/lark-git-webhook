@@ -276,28 +276,58 @@ func parseGitlabTime(value string) (time.Time, bool) {
 
 // gitlabRichText renders a GitLab event line for a Lark post. The repository
 // in the header links to the project page (or its branch tree page) when the
-// line carries the project URL; every " | " segment that is a standalone https
-// URL becomes a clickable link; all other content is plain text.
+// line carries the project URL; on push lines the before..after short-SHA
+// range carries the trailing instance link instead of showing that URL as its
+// own segment; every other " | " segment that is a standalone https URL
+// becomes a clickable link; all other content is plain text.
 func gitlabRichText(line string) []lark.Text {
 	parts := strings.Split(line, " | ")
+	rangeIndex, linkIndex := -1, -1
+	for j := 1; j < len(parts); j++ {
+		if gitlabSHARange(parts[j]) {
+			rangeIndex = j
+			break
+		}
+	}
+	if rangeIndex >= 0 {
+		for j := rangeIndex + 1; j < len(parts); j++ {
+			if gitlabHTTPSURL(parts[j]) {
+				linkIndex = j
+				break
+			}
+		}
+	}
 	segments := make([]lark.Text, 0, len(parts)*2)
-	for i, part := range parts {
+	for i := 0; i < len(parts); i++ {
+		if i == linkIndex {
+			continue
+		}
 		if i > 0 {
 			segments = append(segments, lark.Text{Tag: "text", Text: " | "})
 		}
 		if i == 0 {
-			if linked := gitlabRepoSegment(line, part); linked != nil {
+			if linked := gitlabRepoSegment(line, parts[0]); linked != nil {
 				segments = append(segments, linked...)
 				continue
 			}
 		}
-		if gitlabHTTPSURL(part) {
-			segments = append(segments, lark.Text{Tag: "a", Text: strings.TrimPrefix(part, "https://"), Href: part})
+		if i == rangeIndex && linkIndex >= 0 {
+			segments = append(segments, lark.Text{Tag: "a", Text: parts[i], Href: parts[linkIndex]})
+			continue
+		}
+		if gitlabHTTPSURL(parts[i]) {
+			segments = append(segments, lark.Text{Tag: "a", Text: strings.TrimPrefix(parts[i], "https://"), Href: parts[i]})
 		} else {
-			segments = append(segments, lark.Text{Tag: "text", Text: part})
+			segments = append(segments, lark.Text{Tag: "text", Text: parts[i]})
 		}
 	}
 	return segments
+}
+
+// gitlabSHARange reports whether a segment is a before..after short-SHA pair.
+func gitlabSHARange(part string) bool {
+	before, after, ok := strings.Cut(part, "..")
+	return ok && validCommitSHA(before) && validCommitSHA(after)
 }
 
 // gitlabRepoSegment splits the header "[gitlab:…] user/repo[/branch]" into a
