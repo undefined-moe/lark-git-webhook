@@ -222,6 +222,12 @@ func TestGroupSubscriptionParsesOnlyExactGroupTextCommand(t *testing.T) {
 		t.Fatalf("mentioned subscription=%+v ok=%v", subscription, ok)
 	}
 
+	gitlabOwner := larkDelivery("gitlab-owner-subscription", "im.message.receive_v1", `{"message":{"chat_id":"oc_group","chat_type":"group","message_type":"text","content":"{\"text\":\"@_user_1 /github-add market_value/strategy_console\"}","mentions":[{"key":"@_user_1"}]}}`)
+	subscription, ok = groupSubscription(gitlabOwner, "im.message.receive_v1")
+	if !ok || subscription.ChatID != "oc_group" || subscription.Repository != "market_value/strategy_console" {
+		t.Fatalf("gitlab-owner subscription=%+v ok=%v", subscription, ok)
+	}
+
 	for _, body := range [][]byte{
 		larkDelivery("private", "im.message.receive_v1", `{"message":{"chat_id":"oc_group","chat_type":"p2p","message_type":"text","content":"{\"text\":\"/github-add acme/repo\"}"}}`),
 		larkDelivery("extra", "im.message.receive_v1", `{"message":{"chat_id":"oc_group","chat_type":"group","message_type":"text","content":"{\"text\":\"/github-add acme/repo now\"}"}}`),

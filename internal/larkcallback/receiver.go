@@ -358,12 +358,14 @@ func groupSubscription(body []byte, eventType string) (repositorySubscription, b
 	return repositorySubscription{ChatID: delivery.Event.Message.ChatID, Repository: strings.ToLower(parts[0] + "/" + parts[1])}, true
 }
 
+// validRepositoryOwner accepts GitHub logins (letters, digits, hyphens) and
+// GitLab group/subgroup names, which additionally allow underscores.
 func validRepositoryOwner(value string) bool {
-	if len(value) == 0 || len(value) > 39 || value[0] == '-' || value[len(value)-1] == '-' {
+	if len(value) == 0 || len(value) > 100 || value[0] == '-' || value[len(value)-1] == '-' {
 		return false
 	}
 	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' {
 			continue
 		}
 		return false
