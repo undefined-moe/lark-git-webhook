@@ -429,6 +429,8 @@ func richTextForRepo(line, inheritedRepo string) []lark.Text {
 		isCommitLine = true
 		if validGitHubRepository(repo) {
 			segments = append(segments, lark.Text{Tag: "a", Text: shortSHA(sha), Href: githubCommitURL(repo, sha)})
+		} else if strings.HasPrefix(repo, "https://") {
+			segments = append(segments, lark.Text{Tag: "a", Text: shortSHA(sha), Href: gitlabCommitURL(repo, sha)})
 		} else {
 			segments = append(segments, lark.Text{Tag: "text", Text: shortSHA(sha)})
 		}
@@ -459,7 +461,13 @@ func richTextForRepo(line, inheritedRepo string) []lark.Text {
 func pushRepository(line string) string {
 	line, _, _ = strings.Cut(line, "\n")
 	marker := strings.Index(line, "] ")
-	if marker < 0 || !strings.HasPrefix(line, "[push") {
+	if marker < 0 {
+		return ""
+	}
+	if strings.HasPrefix(line, "[gitlab:") {
+		return gitlabProjectBase(line)
+	}
+	if !strings.HasPrefix(line, "[push") {
 		return ""
 	}
 	displayRepo, _, _ := strings.Cut(line[marker+2:], " | ")
@@ -467,6 +475,26 @@ func pushRepository(line string) string {
 		return repoParts[0] + "/" + repoParts[1]
 	}
 	return displayRepo
+}
+
+// gitlabProjectBase recovers the project web URL from a GitLab push header so
+// its commit lines can link to the GitLab instance; the header's trailing link
+// always starts with the project base followed by "/-/".
+func gitlabProjectBase(line string) string {
+	for _, part := range strings.Split(line, " | ") {
+		base, ok := strings.CutPrefix(part, "https://")
+		if !ok || base == "" {
+			continue
+		}
+		if bare, _, _ := strings.Cut(base, "/-/"); bare != "" {
+			return "https://" + bare
+		}
+	}
+	return ""
+}
+
+func gitlabCommitURL(base, sha string) string {
+	return base + "/-/commit/" + sha
 }
 
 func commitSHA(value string) string {

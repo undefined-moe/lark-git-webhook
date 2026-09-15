@@ -27,20 +27,19 @@ func TestFormatGitlabPushIncludesExpectedFields(t *testing.T) {
 	}`)}
 	line := Format(item)
 	for _, text := range []string{
-		"[gitlab:push] mike/diaspora",
-		"branch master",
+		"[gitlab:push] mike/diaspora/master",
 		"95790bf..da15608",
 		"4 commits",
-		"fixed readme",
 		"@jsmith",
-		"at 2012-01-03T21:36:29Z",
 		"https://gitlab.example.com/mike/diaspora/-/compare/95790bf891e76fee5e1747ab589903a6a1f80f22...da1560886d4f094c3e6c9ef40349f7d38b5d27d7",
+		"commit:b6568db1bc1dcd7f8b4d5a946b0b91f9dacd7327 | Update Catalan translation",
+		"commit:da1560886d4f094c3e6c9ef40349f7d38b5d27d7 | fixed readme",
 	} {
 		if !strings.Contains(line, text) {
 			t.Fatalf("missing %q in %q", text, line)
 		}
 	}
-	for _, forbidden := range []string{"delivery=", "unknown repository", "refs/heads/", "mike/diaspora/master"} {
+	for _, forbidden := range []string{"delivery=", "unknown repository", "refs/heads/", "branch master", "at "} {
 		if strings.Contains(line, forbidden) {
 			t.Fatalf("unexpected %q in %q", forbidden, line)
 		}
@@ -172,6 +171,23 @@ func TestMakeMessageGitlabRendersNoGithubLinks(t *testing.T) {
 		if strings.Contains(segment.Text, "github.com") {
 			t.Fatalf("github URL fabricated in %+v", segment)
 		}
+	}
+}
+
+func TestMakeMessageLinksGitlabCommitLinesToInstance(t *testing.T) {
+	line := "[gitlab:push] group/project/main | 1111111..2222222 | 1 commit | @root | https://gitlab.example.com/group/project/-/compare/1111111111111111111111111111111111111111...2222222222222222222222222222222222222222\ncommit:2222222222222222222222222222222222222222 | fix: everything"
+	content := MakeMessage([]string{line}).Content.Post["zh_cn"].Content
+	if len(content) != 2 {
+		t.Fatalf("paragraphs=%d want 2", len(content))
+	}
+	var href string
+	for _, segment := range content[1] {
+		if segment.Tag == "a" {
+			href = segment.Href
+		}
+	}
+	if href != "https://gitlab.example.com/group/project/-/commit/2222222222222222222222222222222222222222" {
+		t.Fatalf("commit link=%q want GitLab commit URL in %+v", href, content[1])
 	}
 }
 

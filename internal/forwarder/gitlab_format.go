@@ -25,11 +25,10 @@ type gitlabProject struct {
 }
 
 type gitlabCommit struct {
-	ID        string `json:"id"`
-	Message   string `json:"message"`
-	Title     string `json:"title"`
-	Timestamp string `json:"timestamp"`
-	URL       string `json:"url"`
+	ID      string `json:"id"`
+	Message string `json:"message"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
 }
 
 type gitlabPushPayload struct {
@@ -82,13 +81,14 @@ func formatGitlabPush(event string, raw []byte) string {
 	_ = json.Unmarshal(raw, &p)
 	repo := fallback(sanitize(p.Project.PathWithNamespace), "unknown repository")
 	label := event
-	parts := []string{fmt.Sprintf("[%s] %s", label, repo)}
 	ref, isTag := gitlabRefParts(p.Ref)
-	switch {
-	case isTag:
+	displayRepo := repo
+	if !isTag && ref != "" && repo != "unknown repository" {
+		displayRepo += "/" + ref
+	}
+	parts := []string{fmt.Sprintf("[%s] %s", label, displayRepo)}
+	if isTag {
 		parts = append(parts, "tag "+ref)
-	case ref != "":
-		parts = append(parts, "branch "+ref)
 	}
 	before, after := shortSHA(p.Before), shortSHA(p.After)
 	if after == "" {
@@ -100,19 +100,34 @@ func formatGitlabPush(event string, raw []byte) string {
 	if count := gitlabCommitCount(&p); count != nil {
 		parts = append(parts, fmt.Sprintf("%d %s", *count, commitUnit(*count)))
 	}
-	if message := gitlabHeadMessage(p, isTag); message != "" {
+	if message := gitlabHeadMessage(p); message != "" {
 		parts = append(parts, message)
 	}
 	if pusher := gitlabPusher(p.UserUsername, p.UserName); pusher != "" {
 		parts = append(parts, pusher)
 	}
-	if at := gitlabNewestCommitTime(p); at != "" {
-		parts = append(parts, "at "+at)
-	}
 	if link := gitlabPushLink(p, ref, isTag); link != "" {
 		parts = append(parts, link)
 	}
-	return strings.Join(nonEmpty(parts), " | ")
+	line := strings.Join(nonEmpty(parts), " | ")
+	return strings.Join(append([]string{line}, gitlabPushCommitLines(p)...), "\n")
+}
+
+func gitlabPushCommitLines(p gitlabPushPayload) []string {
+	lines := make([]string, 0, len(p.Commits))
+	for _, commit := range p.Commits {
+		sha := sanitize(commit.ID)
+		if validCommitSHA(sha) {
+			sha = "commit:" + sha
+		} else {
+			sha = shortSHA(sha)
+		}
+		message := trim(sanitize(firstNonEmpty(commit.Message, commit.Title)), maxCommitMessageBytes)
+		if line := strings.Join(nonEmpty([]string{sha, message}), " | "); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func gitlabCommitCount(p *gitlabPushPayload) *int {
@@ -134,17 +149,14 @@ func commitUnit(count int) string {
 	return "commits"
 }
 
-// gitlabHeadMessage prefers the newest commit message (commits are listed
-// oldest first and the push tip is the last entry) and falls back to the
-// payload message used by annotated tag pushes.
-func gitlabHeadMessage(p gitlabPushPayload, isTag bool) string {
+// gitlabHeadMessage keeps the GitHub push convention: the head message only
+// appears on the header line when the commit list is empty, in which case it
+// is the payload message used by annotated tag pushes.
+func gitlabHeadMessage(p gitlabPushPayload) string {
 	if len(p.Commits) > 0 {
-		return trim(sanitize(firstNonEmpty(p.Commits[len(p.Commits)-1].Title, p.Commits[len(p.Commits)-1].Message)), maxHeadMessageBytes)
+		return ""
 	}
-	if isTag {
-		return trim(sanitize(p.Message), maxHeadMessageBytes)
-	}
-	return ""
+	return trim(sanitize(p.Message), maxHeadMessageBytes)
 }
 
 func gitlabPusher(username, name string) string {
@@ -152,16 +164,6 @@ func gitlabPusher(username, name string) string {
 		return mention(username)
 	}
 	return mention(name)
-}
-
-func gitlabNewestCommitTime(p gitlabPushPayload) string {
-	if len(p.Commits) == 0 {
-		return ""
-	}
-	if at, ok := parseGitlabTime(p.Commits[len(p.Commits)-1].Timestamp); ok {
-		return at.UTC().Format(time.RFC3339)
-	}
-	return ""
 }
 
 // gitlabPushLink prefers the instance compare page for a real branch push,
